@@ -1,3 +1,10 @@
+# ==================================================
+#
+#     yolov5相关工具库
+#       * Author: Leaf
+#       * Date: 2024-01-26
+#
+# ==================================================
 import cv2
 import numpy as np
 
@@ -136,8 +143,8 @@ def result_show(data,names):
     print('='*75)
 
 # 获取颜色
-def get_color(id,names):
-    code = int(id / len(names) * 256 ** 3)
+def get_color(id, class_number):
+    code = int(id / class_number * 256 ** 3)
     b = code % 256
     g = (code // 256) % 256
     r = (code // 256 // 256)
@@ -162,7 +169,7 @@ def result_draw(_img,
         cv2.rectangle(img, 
                       (int(bbox[0]), int(bbox[1])), 
                       (int(bbox[2]), int(bbox[3])), 
-                      get_color(id_number,names), 5)
+                      get_color(id_number,len(names)), 5)
 
         # 获取文字大小
         (text_width, text_height), baseline = cv2.getTextSize(name + ' {:.2f}'.format(score), 
@@ -175,7 +182,7 @@ def result_draw(_img,
         end_point = (int(bbox[0]) + text_width, int(bbox[1]))
 
         # 绘制矩形填充背景
-        cv2.rectangle(img, start_point, end_point, get_color(id_number,names), thickness=cv2.FILLED)
+        cv2.rectangle(img, start_point, end_point, get_color(id_number,len(names)), thickness=cv2.FILLED)
 
         # 绘制文字
         cv2.putText(img, name + ' {:.2f}'.format(score), (int(bbox[0]), int(bbox[1]) - (baseline>>1)), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,255), 3)

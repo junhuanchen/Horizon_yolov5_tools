@@ -22,7 +22,7 @@ def postprocess(
     origin_size,
     float score_threshold=0.4, 
     float nms_threshold=0.45,
-    int swap_num = 32,
+    int swap_num = 64,
     int max_num = 32):
     """
     model_size: 模型的宽或高（必须一致）
