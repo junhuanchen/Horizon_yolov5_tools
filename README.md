@@ -1,6 +1,7 @@
 # Horizon_yolov5_tools
-基于地平线RDK开发板部署yolov5的相关工具库项目。
+基于地平线RDK X3开发板部署yolov5的相关工具库项目。
 如有任何反馈欢迎戳邮箱：zxy_yys_leaf@163.com
+后续会更新RDK X5版本
 - Author: Leaf
 - Date: 2024-01-26
 
