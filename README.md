@@ -1,9 +1,14 @@
 # Horizon_yolov5_tools
-基于地平线RDK X3开发板部署yolov5的相关工具库项目。  
+基于地平线RDK开发板部署yolov5的相关工具库项目。  
 如有任何反馈欢迎戳邮箱：zxy_yys_leaf@163.com  
-后续会更新RDK X5版本   
+
 - Author: Leaf
-- Date: 2024-01-26
+- Date: 2024-10-30
+## 2024/10/31重要更新
+- 重新撰写了`fast_postprocess`包，大幅度优化计算逻辑，提升`yolov5`后处理速度，处理耗时平均仅需几毫秒。
+- 解决了指针未释放和大量野指针问题。
+- 优化了切片逻辑，现在后处理计算线程的数量可以自行调控。
+- 无需设定算法中输出results的最大行数，因为算法内部将后处理计算与目标数量`obj_num`的获取分离了。
 
 ## 使用方法
 ### 编译后处理库
@@ -11,11 +16,7 @@
 
 在目录`Horizon_yolov5_tools`下的python脚本中，可以通过：
 ``` python
-import fast_postprocess.postprocess as pprcoc
-```  
-或  
-``` python
-from fast_postprocess import postprocess as pprcoc
+from fast_postprocess import RDKyolov5postprocess
 ```
 引入后处理库。  
 
@@ -34,102 +35,137 @@ sudo python3 yolov5_demo.py \
 --names <names列表yaml文件路径> \
 --sco_thr <得分阈值> \
 --nms_thr <NMS阈值> \
---swap_num <中间数据长度> \
---max_num <输出结果的最大值> \
+--thread_num <后处理线程数> \
 --nice <程序优先级> \
 --CPUOC <是否CPU超频>
-```  
-  
-- `--model`: 可以指定需要推理的模型路径，但必须是去除了yolov5的输出解码层导出，拥有3个输出头的onnx模型使用地平线工具链量化的bin文件模型。详情可参考[【模型提速】如何在X3pi使用yolov5模型50ms推理](https://developer.horizon.cc/forumDetail/163807123501918330)   
+```
+
+- `--model`: 可以指定需要推理的模型路径，但必须是去除了yolov5的输出解码层导出，拥有3个输出头的onnx模型使用地平线工具链量化的bin文件模型。详情可参考[【模型提速】如何在X3pi使用yolov5模型50ms推理](https://developer.horizon.cc/forumDetail/163807123501918330)，demo中的模型仅适用于J3/X3芯片，J5/X5或其他版本模型需要另外指定，否则无法运行。   
 - `--image`: 指定推理的图片  
 - `--names`: 储存模型各个类别名称的yaml文件，参考`models/demo.yaml`
 - `--sco_thr`: 得分阈值，默认0.4
 - `--nms_thr`: NMS阈值，默认0.45
-- `--swap_num`: 中间数组的长度，在实现后处理的C++函数中，将模型推理得到的3个boxes分别切片成了4*4,2*2和1*1个子boxes，并且通过21个线程对象并行解码，而解码的结果需要21个长度为`swap_num*6`的数组存取，理论上令`swap_num`为`(model_size/32)^2 * 3`便能保证不会发生指针越界，但实际又不可能达到这个数量，因此此处将这一参数引出可供指定，默认为64，当程序输出`[ERROR]postprocess.cpp: The middle data(size of 84) length out of index!!!`时候说明对应尺寸的boxes发生了越级，需要增大swap_num，但该值过大会导致程序内分配过多指针，可能会降低程序运行速度或增大内存负担
-- `--max_num`：输出结果数量的最大值
+- `--swap_num`: 后处理线程数，默认为8，建议设置与CPU核心数相同
 - `--nice`: 程序优先级，范围通常是从-20（最高优先级）到19（最低优先级），经过尝试发现对运算的加速效果一般
 - `--CPUOC`: 指定为`True`可以在程序运行时开启CPU超频加速运算，效果不错
 
-## fast_postprocess说明
+## fast_postprocess说明 - 2024/10/31更新 -
 C++快速后处理库实现。  
-函数通过处理推理输出的3个`boxes`数组的指针，分别切片为`4*4`,`2*2`和`1*1`的`split_boxes`，将21个`split_boxes`送入21个线程中进行并行解码。  
-解码函数中，对于每个`box`都会搜索最大得分类和其id，先激活计算得分，通过阈值筛选，如果达到阈值才会继续激活位置信息，否则直接返回，大大降低了耗时。  
-然后将21个`boxes`的解码结果整合，进行NMS筛选，输出最终处理结果`best_boxes`和其长度。  
-最后通过`Cython`将`C++ API`包装为`Python API`。
+函数通过处理推理输出的3个`boxes`数组的指针，根据设定的线程数进行切片并放到多线程函数中并行遍历筛选、解码。  
+算法运用了C++代替python计算、多线程加速和先验算法逻辑进行了全方面加速：  
+- 筛选、解码函数中，会先对输入的切片索引做判断，将3个`boxes`的总索引映射到单个`boxes`。  
+- 然后先对得分阈值`score_threshold`进行反`sigmoid`激活，对于每个`box`都会利用`sigmoid`的 单调性，先判断`conf`得分是否超过反激活阈值（因为`score = sigmoid(conf) * sidmoid(prob)`而`sidmoid(prob)`的值在`0`到`1`之间），这一逻辑节约了大量的sigmoid计算。  
+- 通过`conf`得分筛选后再搜索最大得分的类和其id，用同样的方式对`prob`得分做判断，如果通过，再计算真正的`score`得分并与`score_threshold`比较筛选。  
+-  `score`达到阈值后函数才会结合其他部分条件继续做筛选，所有筛选都通过后才会继续激活位置信息并解算为`[xmin ymin xmax ymax cls_id score]`格式box并加入筛选成功数组中。  
+- 最后将所有线程的筛选解码结果整合，进行NMS筛选，输出最终处理结果。  
 
-### `postprocess.cpp`
+### `RDKyolov5postprocess.hpp`
 C++快速后处理函数的主要内容。  
 
-``` C
-int fast_postprocess(
-    float *output0,
-    float *output1,
-    float *output2,
-    int model_size,
-    int class_number,
-    float score_threshold,
-    float nms_threshold,
-    int middle_data_long,
-    float *best_box,
-    int box_number);
-```  
-  
-- `float *output0`: 推理的结果输出数组0地址。  
+``` c++
+#ifndef RDKYOLOV5POSTPROCESS_HPP
+#define RDKYOLOV5POSTPROCESS_HPP
 
-- `float *output1`: 推理的结果输出数组1地址。  
+class RDKyolov5postprocess{
+    private:
+        // 常量
+        const int stride[3] = {8, 16, 32};
+        const int anchors[3][3][2] = {10, 13, 16, 30, 33, 23, 30, 61, 62, 45, 59, 119, 116, 90, 156, 198, 373, 326};
+        // 接收参数
+        int model_size;     // 模型尺寸
+        int classes_number;    // 类别数量
+        float score_threshold; // 得分阈值
+        float nms_threshold;   // NMS阈值
+        int thread_num;        // 线程数
+        // 内部计算参数
+        float deactivate_score; // 反激活得分阈值
+        int boxes_num[3];       // 3个输出头的box数
+        int sub_box_num;        // 子线程任务box数
+        int end_box_num;        // 尾线程任务box数
+        int dboxes_num;         // 解码容器计数器
+        float* decode_boxes;    // 解码容器
+        int* nms_list;          // NMS标识列表
+        int vim_num;            // 目标数量
 
-- `float *output2`: 推理的结果输出数组2地址。  
-  
-- `int model_size`: 模型的输入宽度或长度（长宽必须相同）。  
-  
-- `int class_number`: 模型类别数量。  
-  
-- `float score_threshold`: 得分筛选阈值。  
-  
-- `float float nms_threshold`: 非极大值抑制阈值。  
-  
-- `int middle_data_long`: 中间数据box的内存分配长度。  
+    public:
+        RDKyolov5postprocess(
+            int model_size,     // 模型尺寸
+            int classes_number,    // 类别数量
+            float score_threshold, // 得分阈值
+            float nms_threshold,   // NMS阈值
+            int thread_num);       // 线程数
 
-- `float *best_box`: 后处理的结果存放数组，长度为`box_number*6`。  
+        int process(
+            float* boxes0, // 3个box指针
+            float* boxes1,
+            float* boxes2);
+
+        void score_filter(
+            float* boxes0,   // 3个box的地址
+            float* boxes1, 
+            float* boxes2, 
+            int begin_index, // 开始过滤的首索引
+            int filter_len); // 过滤长度
+
+        void get_results(
+            float* results); 
+
+        ~RDKyolov5postprocess();
+};
+
+#endif
+```
+
+- `RDKyolov5postprocess::RDKyolov5postprocess`: 构造函数  
+
+- `void RDKyolov5postprocess::process`: 后处理函数  
+
+- `int RDKyolov5postprocess::score_filter`: 得分筛选与解码函数，用于多线程计算服务  
   
-- `int box_number`: 后处理的结果存放数组在外部定义的box长度长度，这里是为了防止指针越界，输出长度必然小于等于该值。  
+- `void RDKyolov5postprocess::get_results`: 获取结果  
   
-- `return`: 函数返回后处理结果的box数量
+- `RDKyolov5postprocess::~RDKyolov5postprocess`: 析构函数  
 
 ### `__postprocess__.pyx`
 将`C++ API`包装转换到`Python API`,同时也简化了函数使用。  
 
-``` Python
-def postprocess(
-    outputs,
-    int model_size,
-    int class_number,
-    origin_size,
-    float score_threshold=0.4, 
-    float nms_threshold=0.45,
-    int swap_num = 64,
-    int max_num = 32):
-```  
+``` cython
+cdef class yolov5postprocess:
+    cdef RDKyolov5postprocess* c_obj
 
-- `outputs`: 直接传入地平线工具链`pyeasy_dnn`库中对象`models[]`的`forward`方法输出对象即可。  
-  
-- `int model_size`: 模型的输入宽度或长度（长宽必须相同）。  
-  
-- `int class_number`: 模型类别数量。  
-  
-- `origin_size`: 原始图片大小`(origin_h, origin_w)`，需要传入元组整数类型数据。  
-  
-- `float score_threshold`: 得分筛选阈值。  
-  
-- `float float nms_threshold`: 非极大值抑制阈值。 
+    def __cinit__(
+        self, 
+        model_size, 
+        classes_number, 
+        score_threshold = 0.4, 
+        nms_threshold = 0.45, 
+        thread_num = 4
+        ):
+        self.c_obj = new RDKyolov5postprocess(model_size, classes_number, score_threshold, nms_threshold, thread_num)
 
-- `int swap_num = 64`: 中间数据box的内存分配长度，将被直接传入`(postprocess.cpp:fast_postprocess)middle_data_long`
+    def __dealloc__(self):
+        del self.c_obj
 
-- `int max_num`: 后处理输出的结果数量上限。
+    def process(self, outputs):
+        results_lenth = self.c_obj.process(
+            <float*>cnp.PyArray_DATA(outputs[0].buffer.reshape(-1)),
+            <float*>cnp.PyArray_DATA(outputs[1].buffer.reshape(-1)),
+            <float*>cnp.PyArray_DATA(outputs[2].buffer.reshape(-1)))
+        results = np.zeros((results_lenth,6), dtype=np.float32)
+        self.c_obj.get_results(<float*>cnp.PyArray_DATA(results))
+        return results
+```
+
+- `yolov5postprocess.__cinit__`: 构造函数。  
+  
+- `yolov5postprocess.__dealloc__`: 析构函数。  
+  
+- `yolov5postprocess.process`: 后处理函数。  
+  
 
 ### `setup.py`
 用于编译产生Cython的`.so`共享库。  
-  
+
 开发板端在目录`fast_postprocess`下键入`sudo python3 setup.py build_ext --inplace`进行编译，弹出有关`Numpy API`的警告可忽略，看见绿色字样`Setup has been completed!`后即编译成功。
 
 ## `bpu_yolov5_tools.py`函数说明
@@ -149,7 +185,7 @@ if tools.model_val(models) == 0:
     print('模型验证通过！')
 else:
     raise ValueError('模型格式错误！')
-```  
+```
 
 
 ### `models_info_show(models):`
@@ -194,8 +230,9 @@ shape: (1, 21, 21, 255)
 - `data`: numpy数组对象
 - `names`：存有模型各类别名称字符串的列表对象。  
   
+
 `data`的结构:`data[n,0]`~`data[n,5]`分别存储`第N个结果信息的xmin,ymin,xmax,ymax,id,score`  
-  
+
 会向终端打印类似如下信息：
 ```
 ===========================================================================
@@ -218,11 +255,11 @@ ser      xmin     ymin     xmax     ymax     id       name     score
 14       537.16   514.42   554.66   534.34   0        person   0.45     
 15       1205.86  452.89   1215.96  463.19   0        person   0.41     
 ===========================================================================
-```  
+```
 
 ### `get_color(id, class_number):`
 获取图形框颜色，传入类别id和类个数，返回长度为3的代表bgr值的元组类型。 
-  
+
 ### `result_draw(_img, data, names):`
 绘制图像框，并储存到目录下的`results`目录中。
 - `_img`: 传入cv2图片对象
