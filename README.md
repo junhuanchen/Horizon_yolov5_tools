@@ -45,7 +45,7 @@ sudo python3 yolov5_demo.py \
 - `--names`: 储存模型各个类别名称的yaml文件，参考`models/demo.yaml`
 - `--sco_thr`: 得分阈值，默认0.4
 - `--nms_thr`: NMS阈值，默认0.45
-- `--swap_num`: 后处理线程数，默认为8，建议设置与CPU核心数相同
+- `--thread_num`: 后处理线程数，默认为8，建议设置与CPU核心数相同
 - `--nice`: 程序优先级，范围通常是从-20（最高优先级）到19（最低优先级），经过尝试发现对运算的加速效果一般
 - `--CPUOC`: 指定为`True`可以在程序运行时开启CPU超频加速运算，效果不错
 
