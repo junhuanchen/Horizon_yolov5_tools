@@ -8,7 +8,7 @@
 import numpy as np
 from hobot_dnn import pyeasy_dnn as dnn
 from fast_postprocess import RDKyolov5postprocess
-import bpu_yolov5_tools as tools
+import bpu_yolov5_tools as tools  
 import argparse, yaml, time, cv2, os
 
 if __name__ == '__main__':
@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('--nms_thr', type=float, default=0.45, help='NMS阈值')
     parser.add_argument('--thread_num', type=int, default=8, help='后处理线程数')
     parser.add_argument('--nice', type=int, default=0, help='程序优先级')
-    parser.add_argument('--CPUOC', type=bool, default=False, help='是否CPU超频')
+    parser.add_argument('--CPUOC', type=bool, default=True, help='是否CPU超频')
     opt = parser.parse_args()
 
     try:
@@ -54,7 +54,7 @@ if __name__ == '__main__':
         # 获取模型信息
         model_size = models[0].inputs[0].properties.shape[2]
         class_number = models[0].outputs[0].properties.shape[-1]//3-5
-
+        print("模型信息", model_size, class_number)
         # 后处理工具
         pst = RDKyolov5postprocess.yolov5postprocess(
             model_size, 
@@ -76,9 +76,10 @@ if __name__ == '__main__':
 
         # 后处理
         # 如果需要测试后处理1k次，可以把下方注释解除
-        for i in range(1000):
-            results = pst.process(outputs)
-        # results = pst.process(outputs)
+        # # for i in range(100):
+        #     outputs = models[0].forward(nv12_data)
+        #     results = pst.process(outputs)
+        results = pst.process(outputs)
         t2 = time.time()
 
         results[:,0] *= img.shape[1]

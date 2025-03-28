@@ -1,4 +1,14 @@
+
 # Horizon_yolov5_tools
+
+默认 80 测试用例(平均69ms)
+
+python yolov5_demo.py --model models/yolov5s_672x672_nv12.bin --names models/demo.yaml --sco_thr 0.3 --image ./images/kite.jpg
+
+提供一个 2 火焰与烟雾的分类测试用例(平均36ms)
+
+python yolov5_demo.py --model models/dls_yolov5s_672x672_nv12.bin --names models/dls_demo.yaml --sco_thr 0.3 --image ./images/ts.jpg
+
 基于地平线RDK开发板部署yolov5的相关工具库项目。  
 如有任何反馈欢迎戳邮箱：zxy_yys_leaf@163.com  
 
