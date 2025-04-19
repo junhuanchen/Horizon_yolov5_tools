@@ -19,7 +19,7 @@ if __name__ == '__main__':
     parser.add_argument('--names', type=str, default='./models/lwh_demo.yaml', help='name列表yaml文件路径')
     parser.add_argument('--sco_thr', type=float, default=0.3, help='得分阈值')
     parser.add_argument('--nms_thr', type=float, default=0.35, help='NMS阈值')
-    parser.add_argument('--thread_num', type=int, default=1, help='后处理线程数')
+    parser.add_argument('--thread_num', type=int, default=2, help='后处理线程数')
     parser.add_argument('--nice', type=int, default=0, help='程序优先级')
     parser.add_argument('--CPUOC', type=bool, default=True, help='是否CPU超频')
     opt = parser.parse_args()
@@ -67,16 +67,17 @@ if __name__ == '__main__':
         h, w = models[0].inputs[0].properties.shape[2:]
         # resized_data = cv2.resize(img, (h,w), interpolation=cv2.INTER_AREA)
         # nv12_data = tools.bgr2nv12(resized_data)
-        
+
+        import mmap
+        import os
+
+        # 打开共享内存文件
+        fd = os.open("/dev/shm/nv12_shared_mem", os.O_RDONLY)
+
+        # 创建内存映射
+        shared_mem = mmap.mmap(fd, int(h*w*1.5), access=mmap.ACCESS_READ)
+
         for i in range(1000):
-
-            import mmap
-            import os
-
-            # 打开共享内存文件
-            fd = os.open("/dev/shm/nv12_shared_mem", os.O_RDONLY)
-            # 创建内存映射
-            shared_mem = mmap.mmap(fd, int(h*w*1.5), access=mmap.ACCESS_READ)
 
             t0 = time.time()
 
@@ -112,13 +113,14 @@ if __name__ == '__main__':
             # 保存图片
             # cv2.imwrite('results/'+opt.image.split('/')[-1][0:-4]+'.jpg', img)
 
+        # 关闭内存映射和文件描述符
+        shared_mem.close()
+
     finally:
         # 关闭CPU超频
         os.system("sudo bash -c 'echo 0 > /sys/devices/system/cpu/cpufreq/boost'")
         # 恢复默认的任务优先极
         os.nice(-opt.nice)
 
-        # 关闭内存映射和文件描述符
-        shared_mem.close()
         os.close(fd)
 
