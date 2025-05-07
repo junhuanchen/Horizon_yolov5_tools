@@ -8,14 +8,16 @@
 import numpy as np
 from hobot_dnn import pyeasy_dnn as dnn
 from fast_postprocess import RDKyolov5postprocess
-import bpu_yolov5_tools as tools  
-import argparse, yaml, time, cv2, os
+import bpu_yolov5_tools as tools
+import argparse, yaml, time, os
+import asyncio
+import nats
+import sysv_ipc
 
-if __name__ == '__main__':
+async def main():
     # 参数设置
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='/root/X3_Media/demo/cpp_nats_pub_img_with_face/Horizon_yolov5_tools/models/lwh_yolov5s_672x672_nv12.bin', help="bin模型路径")
-    parser.add_argument('--image', type=str, default='./images/kite.jpg', help='推理图片路径')
     parser.add_argument('--names', type=str, default='./models/lwh_demo.yaml', help='name列表yaml文件路径')
     parser.add_argument('--sco_thr', type=float, default=0.3, help='得分阈值')
     parser.add_argument('--nms_thr', type=float, default=0.35, help='NMS阈值')
@@ -23,6 +25,8 @@ if __name__ == '__main__':
     parser.add_argument('--nice', type=int, default=0, help='程序优先级')
     parser.add_argument('--CPUOC', type=bool, default=True, help='是否CPU超频')
     opt = parser.parse_args()
+
+    # PY 的接口会内存泄漏，不影响应用，可以优化，或设计成 泄漏到多少后自动退出重开也可以解决，程序重入的时间大概 最快 400 - 最慢 500ms 所以也可以用。
 
     try:
         os.system("sudo bash -c 'echo performance > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor'")
@@ -36,9 +40,6 @@ if __name__ == '__main__':
 
         # 加载模型
         models = dnn.load(opt.model)
-
-        # cv2加载图片
-        # img = cv2.imread(opt.image) 
 
         # 加载names.yaml文件
         with open(opt.names, 'r') as file: 
@@ -63,64 +64,67 @@ if __name__ == '__main__':
             nms_threshold = opt.nms_thr, 
             thread_num = opt.thread_num)
 
-        # 图片格式转换
+        # 连接到 NATS 服务器
+        nc = await nats.connect(servers=["nats://localhost:4222"])
+
         h, w = models[0].inputs[0].properties.shape[2:]
-        # resized_data = cv2.resize(img, (h,w), interpolation=cv2.INTER_AREA)
-        # nv12_data = tools.bgr2nv12(resized_data)
+        shared_mem = sysv_ipc.SharedMemory(0x1234, flags=sysv_ipc.IPC_CREAT, size=int(h*w*1.5))
+        nv12_data = np.frombuffer(shared_mem, dtype=np.uint8) # 内存映射有点特殊
 
-        import mmap
-        import os
-
-        # 打开共享内存文件
-        fd = os.open("/dev/shm/nv12_shared_mem", os.O_RDONLY)
-
-        # 创建内存映射
-        shared_mem = mmap.mmap(fd, int(h*w*1.5), access=mmap.ACCESS_READ)
-
-        for i in range(1000):
-
+        while True:
+            # nv12_data = np.frombuffer(shared_mem, dtype=np.uint8)
+            
             t0 = time.time()
-
-            nv12_data = np.frombuffer(shared_mem[:], dtype=np.uint8)
-
+            
             # 模型推理
             outputs = models[0].forward(nv12_data)
+            
             t1 = time.time()
 
             # 后处理
-            # 如果需要测试后处理1k次，可以把下方注释解除
-            # # for i in range(100):
-            #     outputs = models[0].forward(nv12_data)
-            #     results = pst.process(outputs)
             results = pst.process(outputs)
-            t2 = time.time()
 
             results[:,0] *= w
             results[:,1] *= h
             results[:,2] *= w
             results[:,3] *= h
 
-            # 输出结果
-            tools.result_show(results, names['names'])
+            t2 = time.time()
+
+            # 格式化输出结果
+            # if len(results):
+            #     tools.result_show(results, names['names'])
+
+            # 获取结果
+            for result in results:
+                bbox = result[:4] # 矩形框位置信息  
+                score = result[5] # 置信度得分
+                id_number = int(result[4]) # id
+                name = names['names'][id_number] # 名称
+                # print('{:<9.2f}{:<9.2f}{:<9.2f}{:<9.2f}{:<9d}{:<16}{:<9.2f}'.format(bbox[0], bbox[1], bbox[2], bbox[3], id_number, name, score))
+
+                # 根据 JSON 模板格式化结果
+                json_template = R'{"data":"%s","top_left_x":%d,"top_left_y":%d,"bottom_right_x":%d,"bottom_right_y":%d}' % (
+                    name, int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                )
+                # 发布到 NATS
+                await nc.publish("app.vision.yolo", json_template.encode('utf-8'))
+                # print(json_template)
 
             # 输出时间
-            print("infer time:",1000*(t1-t0),"ms")
-            print("postprocess time:",1000*(t2-t1),"ms")
+            # print("infer time:",1000*(t1-t0),"ms")
+            # print("postprocess time:",1000*(t2-t1),"ms")
+            await nc.flush()
 
-            # 可视化绘制
-            # img = tools.result_draw(img, results, names['names'])
-
-            # 保存图片
-            # cv2.imwrite('results/'+opt.image.split('/')[-1][0:-4]+'.jpg', img)
-
-        # 关闭内存映射和文件描述符
-        shared_mem.close()
-
+    except Exception as e:
+        print("Exception occurred: ", str(e))
     finally:
         # 关闭CPU超频
         os.system("sudo bash -c 'echo 0 > /sys/devices/system/cpu/cpufreq/boost'")
         # 恢复默认的任务优先极
         os.nice(-opt.nice)
+        for tmp in models:
+            del tmp
 
-        os.close(fd)
-
+if __name__ == '__main__':
+    asyncio.run(main())

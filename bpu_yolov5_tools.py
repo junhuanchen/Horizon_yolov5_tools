@@ -5,7 +5,6 @@
 #       * Date: 2024-01-26
 #
 # ==================================================
-import cv2
 import numpy as np
 
 # 验证模型是否正常
@@ -91,6 +90,7 @@ def models_info_show(models):
 
 # bgr2nv12
 def bgr2nv12(image):
+    import cv2
     height, width = image.shape[0], image.shape[1]
     area = height * width
     yuv420p = cv2.cvtColor(image, cv2.COLOR_BGR2YUV_I420).reshape((area * 3 // 2,))
@@ -107,7 +107,7 @@ def bgr2nv12(image):
 def result_show(data,names):
     # 打印表头
     print('='*75)
-    print('result')
+    # print('result')
     print('-'*75)
     print('{:<9}{:<9}{:<9}{:<9}{:<9}{:<9}{:<9}{:<9}'.format('ser','xmin','ymin','xmax','ymax','id','name','score'))
     # 遍历结果
@@ -156,6 +156,7 @@ def result_draw(_img,
                 data, 
                 names):
 
+    import cv2
     img = _img
     # 遍历结果
     for result in data:
